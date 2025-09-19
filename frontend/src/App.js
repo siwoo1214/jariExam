@@ -2,13 +2,88 @@ import React, { useState, useEffect } from 'react';
 import { parkingAPI } from './services/api';
 import './App.css';
 
+// 카카오맵 동적 로딩 훅
+
+const useKakaoMap = () => {
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const loadKakaoMap = () => {
+    // 이미 로드된 경우
+    if (window.kakao && window.kakao.maps) {
+      setIsLoaded(true);
+      return Promise.resolve();
+    }
+
+    // 이미 로딩 중인 경우
+    if (isLoading) {
+      return Promise.reject(new Error('이미 로딩 중입니다'));
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    return new Promise((resolve, reject) => {
+      // 기존 스크립트 제거
+      const existingScript = document.querySelector('script[src*="dapi.kakao.com"]');
+      if (existingScript) {
+        existingScript.remove();
+      }
+
+      const script = document.createElement('script');
+      script.type = 'text/javascript';
+      script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey=11a8234bf504a62d4570a8d247e94a52&autoload=false';
+      
+      script.onload = () => {
+        // autoload=false로 설정했으므로 수동으로 로드
+        if (window.kakao && window.kakao.maps) {
+          window.kakao.maps.load(() => {
+            setIsLoaded(true);
+            setIsLoading(false);
+            console.log('카카오맵 동적 로드 성공');
+            resolve();
+          });
+        } else {
+          const err = new Error('카카오맵 스크립트 로드 후 객체를 찾을 수 없습니다');
+          setError(err);
+          setIsLoading(false);
+          reject(err);
+        }
+      };
+      
+      script.onerror = () => {
+        const err = new Error('카카오맵 스크립트 로드 실패');
+        setError(err);
+        setIsLoading(false);
+        reject(err);
+      };
+
+      document.head.appendChild(script);
+      
+      // 10초 타임아웃
+      setTimeout(() => {
+        if (isLoading) {
+          const err = new Error('카카오맵 로드 타임아웃');
+          setError(err);
+          setIsLoading(false);
+          reject(err);
+        }
+      }, 10000);
+    });
+  };
+
+  return { isLoaded, isLoading, error, loadKakaoMap };
+};
+
 function App() {
   const [parkingData, setParkingData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [map, setMap] = useState(null);
   const [markers, setMarkers] = useState([]);
-  const [mapError, setMapError] = useState(false);
+  
+  const { isLoaded: isMapLoaded, isLoading: isMapLoading, error: mapError, loadKakaoMap } = useKakaoMap();
 
   // API에서 주차장 데이터 가져오기
   useEffect(() => {
@@ -44,18 +119,20 @@ function App() {
     fetchParkingData();
   }, []);
 
-  // 카카오맵 초기화
+  // 카카오맵 로드 및 초기화
   useEffect(() => {
+    loadKakaoMap().catch(error => {
+      console.error('카카오맵 로드 실패:', error);
+    });
+  }, []);
+
+  // 맵 초기화 (카카오맵 로드 완료 후)
+  useEffect(() => {
+    if (!isMapLoaded) return;
+    
     let isMounted = true;
     
     const initializeMap = () => {
-      // 카카오맵이 로드되었는지 확인
-      if (!window.kakao || !window.kakao.maps) {
-        console.error('카카오맵이 로드되지 않았습니다.');
-        setMapError(true);
-        return;
-      }
-      
       console.log('카카오맵 초기화 시도 중...');
       
       try {
@@ -106,28 +183,17 @@ function App() {
         
       } catch (error) {
         console.error('카카오맵 초기화 실패:', error);
-        setMapError(true);
-      }
-    };
-    
-    // 카카오맵 로드 대기
-    const checkKakaoLoad = () => {
-      if (window.kakao && window.kakao.maps) {
-        initializeMap();
-      } else {
-        console.log('카카오맵 로드 대기 중...');
-        setTimeout(checkKakaoLoad, 100);
       }
     };
     
     // DOM 렌더링 대기 후 시작
-    const timeoutId = setTimeout(checkKakaoLoad, 500);
+    const timeoutId = setTimeout(initializeMap, 300);
     
     return () => {
       isMounted = false;
       clearTimeout(timeoutId);
     };
-  }, []);
+  }, [isMapLoaded]);
 
   // 마커 생성 및 업데이트
   useEffect(() => {
@@ -371,6 +437,7 @@ function App() {
               <div style={{ fontSize: '14px', marginTop: '20px', opacity: 0.6 }}>
                 카카오맵 로드 실패<br/>
                 왼쪽 목록에서 주차장을 선택하세요<br/>
+                <small>{mapError.message}</small><br/>
                 <button 
                   onClick={() => window.location.reload()} 
                   style={{
@@ -385,6 +452,25 @@ function App() {
                 >
                   새로고침
                 </button>
+              </div>
+            </div>
+          ) : isMapLoading ? (
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              alignItems: 'center',
+              height: '100%',
+              background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+              color: 'white',
+              textAlign: 'center',
+              fontFamily: 'Arial, sans-serif'
+            }}>
+              <div style={{ fontSize: '48px', marginBottom: '20px', animation: 'pulse 2s infinite' }}>🗺️</div>
+              <div style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '10px' }}>카카오맵 로딩 중...</div>
+              <div style={{ fontSize: '16px', opacity: 0.8 }}>서울시 주차장 지도를 준비하고 있습니다</div>
+              <div style={{ fontSize: '14px', marginTop: '20px', opacity: 0.6 }}>
+                잠시만 기다려주세요...
               </div>
             </div>
           ) : (
